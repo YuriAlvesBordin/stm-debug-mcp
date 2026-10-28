@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "stm32-mcp"
+version = "0.1.0"
+description = "MCP server for building, flashing, debugging, and communicating with STM32 hardware over ST-Link and serial."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Yuri Alves Bordin" }]
+requires-python = ">=3.10"
+keywords = ["stm32", "mcp", "openocd", "st-link", "embedded", "firmware", "debugging"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Topic :: Embedded Systems",
+    "Topic :: Software Development :: Embedded Systems",
+]
+dependencies = [
+    "mcp>=1.0.0",
+    "pyserial>=3.5",
+]
+
+[project.optional-dependencies]
+capture = ["opencv-python>=4.8"]
+dev = ["ruff>=0.4"]
+
+[project.scripts]
+stm32-mcp = "stm32_mcp.server:main"
+stm32-fus = "stm32_mcp.fus:cli_main"
+stm32-serial = "stm32_mcp.serial_client:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stm32_mcp"]
