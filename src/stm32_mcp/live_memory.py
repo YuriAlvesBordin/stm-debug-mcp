@@ -16,15 +16,14 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from .board_map import resolve_probe_full
-from .debug_tools import _width_from_size, _ocd_read_cmd, _ocd_write_cmd, parse_write_value
+from .debug_tools import _ocd_read_cmd, _ocd_write_cmd, _width_from_size, parse_write_value
 from .struct_layout import expand_struct
 from .symexpr import resolve_symbol_flexible
 from .toolchain import (
+    _HLA_NEWTAP_FIX,
+    _openocd_scripts_dir,
     find_openocd,
     openocd_workarea,
-    openocd_target_cfg,
-    _openocd_scripts_dir,
-    _HLA_NEWTAP_FIX,
 )
 
 _executor = ThreadPoolExecutor(max_workers=2)
@@ -359,7 +358,7 @@ def _run_session(session: LiveMemorySession) -> None:
     """Background daemon thread: poll variables and write JSONL."""
     try:
         output_file = open(session.output_path, "a")
-    except OSError as e:
+    except OSError:
         session.error_count += 1
         return
 

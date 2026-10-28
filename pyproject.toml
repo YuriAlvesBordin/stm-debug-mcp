@@ -18,17 +18,16 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
-    "Topic :: Embedded Systems",
     "Topic :: Software Development :: Embedded Systems",
 ]
 dependencies = [
-    "mcp>=1.0.0",
+    "mcp>=1.0.0,<2",
     "pyserial>=3.5",
 ]
 
 [project.optional-dependencies]
 capture = ["opencv-python>=4.8"]
-dev = ["ruff>=0.4"]
+dev = ["ruff>=0.4", "pytest>=8.0"]
 
 [project.scripts]
 stm32-mcp = "stm32_mcp.server:main"
@@ -37,3 +36,13 @@ stm32-serial = "stm32_mcp.serial_client:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/stm32_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["E501", "E741"]

@@ -5,11 +5,28 @@ import logging
 from mcp.server.fastmcp import FastMCP
 
 from .board_map import stm32_list_probes, stm32_set_nickname
-from .serial_bridge import start_bridge
 from .build import stm32_build, stm32_build_and_flash
 from .debug_tools import stm32_read_memory, stm32_write_memory
 from .flash import stm32_board_info, stm32_flash
 from .fus import stm32_ble_stack_install, stm32_fus_bootstrap, stm32_fus_upgrade
+from .live_memory import live_memory_read, live_memory_start, live_memory_stop, live_memory_write
+from .realtime_debug import (
+    debug_backtrace,
+    debug_breakpoint,
+    debug_halt,
+    debug_mem,
+    debug_registers,
+    debug_reset,
+    debug_resume,
+    debug_session_start,
+    debug_session_stop,
+    debug_status,
+    debug_step,
+    debug_wait_halt,
+    debug_watchpoint,
+)
+from .serial_bridge import start_bridge
+from .serial_sequence import serial_sequence
 from .serial_tools import (
     serial_connect,
     serial_disconnect,
@@ -17,24 +34,7 @@ from .serial_tools import (
     serial_read,
     serial_send,
 )
-from .serial_sequence import serial_sequence
-from .live_memory import live_memory_start, live_memory_stop, live_memory_read, live_memory_write
 from .symexpr import symbol_info
-from .realtime_debug import (
-    debug_session_start,
-    debug_session_stop,
-    debug_status,
-    debug_halt,
-    debug_resume,
-    debug_step,
-    debug_reset,
-    debug_wait_halt,
-    debug_breakpoint,
-    debug_watchpoint,
-    debug_registers,
-    debug_mem,
-    debug_backtrace,
-)
 
 INSTRUCTIONS = """\
 stm32-mcp: Build, flash, and communicate with STM32 hardware.

@@ -1,8 +1,8 @@
 """stm32-serial — readline CLI client for the serial bridge."""
 
-import readline
 import socket
 import sys
+
 
 def main():
     host = "127.0.0.1"

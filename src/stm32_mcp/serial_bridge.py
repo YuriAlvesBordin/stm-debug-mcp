@@ -7,18 +7,18 @@ import threading
 import serial.tools.list_ports
 
 from .board_map import (
+    _probe_cache,
     get_board_nickname_for_probe_sn,
     get_probe_nickname,
     load_map,
-    _probe_cache,
 )
 from .serial_tools import (
-    ST_VID,
     ST_PIDS,
+    ST_VID,
     _connections,
     _do_connect,
-    _do_send,
     _do_list_ports,
+    _do_send,
 )
 
 log = logging.getLogger(__name__)

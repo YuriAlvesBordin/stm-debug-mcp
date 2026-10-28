@@ -32,7 +32,7 @@ def _check_and_clear_workspace_lock() -> str | None:
 
     try:
         result = subprocess.run(
-            ["pgrep", "-f", f"stm32-mcp-workspace"],
+            ["pgrep", "-f", "stm32-mcp-workspace"],
             capture_output=True, text=True, timeout=5
         )
         if result.returncode == 0 and result.stdout.strip():

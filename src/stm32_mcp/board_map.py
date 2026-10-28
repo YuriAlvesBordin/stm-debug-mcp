@@ -85,7 +85,7 @@ def load_map() -> dict:
     """Read board map JSON. Returns empty structure if missing/corrupt."""
     path = _map_path()
     try:
-        with open(path, "r") as f:
+        with open(path) as f:
             data = json.load(f)
         if "boards" not in data:
             data["boards"] = {}

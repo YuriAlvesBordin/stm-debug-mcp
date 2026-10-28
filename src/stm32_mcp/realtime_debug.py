@@ -491,8 +491,8 @@ async def debug_session_start(probe: str = "", elf_path: str = "") -> str:
         f"Target state: {state}\n"
         f"ELF: {elf_path or '(none — addresses only)'}"
         + (f" ({sym_count} code symbols)" if sym_count else "") + "\n"
-        f"NOTE: stop this session (debug_session_stop) before flashing or "
-        f"using stm32_read/write_memory or live_memory on this probe."
+        "NOTE: stop this session (debug_session_stop) before flashing or "
+        "using stm32_read/write_memory or live_memory on this probe."
     )
 
 async def debug_session_stop(session_id: str, resume_first: bool = True) -> str:

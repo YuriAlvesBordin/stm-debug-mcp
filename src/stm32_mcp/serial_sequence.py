@@ -2,15 +2,14 @@
 
 import asyncio
 import json
-import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from .serial_tools import _connections, _read_with_polling, LINE_ENDINGS
-from .serial_bridge import _get_send_lock
-from .debug_tools import _do_read_memory, _do_write_memory
 from .board_map import resolve_probe_full
+from .debug_tools import _do_read_memory, _do_write_memory
+from .serial_bridge import _get_send_lock
+from .serial_tools import LINE_ENDINGS, _connections, _read_with_polling
 
 _executor = ThreadPoolExecutor(max_workers=2)
 

@@ -132,7 +132,7 @@ def _do_board_info(sn: str = "", target_cfg: str = "", chipid: int = 0) -> str:
     if chip_match:
         info.append(f"Chip ID: {chip_match.group(1)}")
 
-    from .board_map import get_board_nickname_for_probe_sn, get_probe_nickname, _probe_cache
+    from .board_map import get_board_nickname_for_probe_sn, get_probe_nickname
     probe_nick = get_probe_nickname(sn)
     board_nick = get_board_nickname_for_probe_sn(sn)
     if board_nick:
