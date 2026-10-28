@@ -26,21 +26,21 @@ The chip ID maps in `src/stm32_mcp/toolchain.py` and `src/stm32_mcp/board_map.py
 | STM32C0 | `stm32c0x.cfg` | 0x443 |
 | STM32U5 | `stm32u5x.cfg` | 0x455, 0x476, 0x481, 0x482 |
 
-Build, flash, memory read/write, live monitoring, debug sessions, and serial work for all of the above. Watchpoints depend on the DWT unit — Cortex-M0/M0+ parts (F0, G0, L0, C0) have few or none.
+Build, flash, memory read/write, live monitoring, debug sessions, and serial work for all of the above. Watchpoints depend on the DWT unit: Cortex-M0/M0+ parts (F0, G0, L0, C0) have few or none.
 
 Feature-specific notes:
 
 - **STM32WB FUS/BLE bringup** (`stm32_fus_*`) currently supports STM32WB1x (chip ID 0x494) only.
-- If a chip ID is missing from the maps, tools fail with a clear "unknown chip ID" error — nothing is flashed blindly.
+- If a chip ID is missing from the maps, tools fail with a clear "unknown chip ID" error: nothing is flashed blindly.
 
 ## Adding support for more MCUs
 
 Contributions adding families or filling in missing chip IDs are welcome. The chip ID for any part is in its reference manual (`DEV_ID` in the DBGMCU_IDCODE register) or printed by `st-info --chipid`.
 
-1. **`src/stm32_mcp/toolchain.py` — `_CHIPID_TO_TARGET`**: add `chip_id -> "<openocd target>.cfg"`. The config must exist in your OpenOCD installation (`target/` directory).
-2. **`src/stm32_mcp/toolchain.py` — `_CHIPID_TO_WORKAREA`** (optional): small RAM work-area size in bytes for parts where the OpenOCD default misbehaves; otherwise omit.
-3. **`src/stm32_mcp/board_map.py` — `_CHIPID_TO_UID_ADDR`**: add the chip ID and the address of the 96-bit unique device ID (also from the reference manual) so `stm32_list_probes` can pin board nicknames to the MCU.
-4. **STM32WB wireless coprocessor bringup only — `src/stm32_mcp/fus.py` `_WB_INSTALL_MAP`**: add the chip ID with its FUS/BLE image addresses and stack variant.
+1. **`src/stm32_mcp/toolchain.py`: `_CHIPID_TO_TARGET`**: add `chip_id -> "<openocd target>.cfg"`. The config must exist in your OpenOCD installation (`target/` directory).
+2. **`src/stm32_mcp/toolchain.py`: `_CHIPID_TO_WORKAREA`** (optional): small RAM work-area size in bytes for parts where the OpenOCD default misbehaves; otherwise omit.
+3. **`src/stm32_mcp/board_map.py`: `_CHIPID_TO_UID_ADDR`**: add the chip ID and the address of the 96-bit unique device ID (also from the reference manual) so `stm32_list_probes` can pin board nicknames to the MCU.
+4. **STM32WB wireless coprocessor bringup only: `src/stm32_mcp/fus.py` `_WB_INSTALL_MAP`**: add the chip ID with its FUS/BLE image addresses and stack variant.
 5. Test on real hardware if you can: `stm32_list_probes`, `stm32_board_info`, and a flash + verify cycle. Open a PR describing the part number tested.
 
-For tooling gaps (missing OpenOCD config, different install layout), `toolchain.py` is also where executable discovery lives — PATH is checked first, then common install locations, so additions there are usually unnecessary.
+For tooling gaps (missing OpenOCD config, different install layout), `toolchain.py` is also where executable discovery lives: PATH is checked first, then common install locations, so additions there are usually unnecessary.

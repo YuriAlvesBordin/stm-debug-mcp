@@ -5,11 +5,11 @@
 **Software**
 
 - Python 3.10 or newer
-- [STM32CubeIDE](https://www.st.com/en/development-tools/stm32cubeide.html) — required for the headless builder
+- [STM32CubeIDE](https://www.st.com/en/development-tools/stm32cubeide.html): required for the headless builder
 - [OpenOCD](https://openocd.org/) (package-manager install or the CubeIDE-bundled one)
 - `st-info` from the [stlink open-source tools](https://github.com/stlink-org/stlink) (optional, improves probe detection)
-- ARM GCC toolchain on PATH (`arm-none-eabi-nm`, `arm-none-eabi-gdb`) — needed for symbol resolution and struct expansion
-- [STM32CubeProgrammer](https://www.st.com/en/development-tools/stm32cubeprog.html) CLI — needed only for STM32WB FUS/BLE bringup
+- ARM GCC toolchain on PATH (`arm-none-eabi-nm`, `arm-none-eabi-gdb`): needed for symbol resolution and struct expansion
+- [STM32CubeProgrammer](https://www.st.com/en/development-tools/stm32cubeprog.html) CLI: needed only for STM32WB FUS/BLE bringup
 
 Most executables are discovered automatically: PATH first, then common install locations (`/opt/homebrew`, `/usr/local`, `/usr`, `~/.local/bin`, `~/st/stm32cubeide_*`, `/opt/st/`).
 
@@ -28,8 +28,8 @@ pip install .            # add.[capture] if you want screenshot capture steps
 
 This installs the `stm32-mcp` server plus two standalone CLI helpers:
 
-- `stm32-fus` — FUS/BLE bringup for STM32WB from a shell
-- `stm32-serial` — interactive serial terminal sharing the MCP connection
+- `stm32-fus`: FUS/BLE bringup for STM32WB from a shell
+- `stm32-serial`: interactive serial terminal sharing the MCP connection
 
 ## Configure your MCP client
 
@@ -72,7 +72,7 @@ Then try the typical workflow: `stm32_build_and_flash` → `serial_connect` → 
 
 ## Multiple boards
 
-Every tool accepts an optional `probe` argument (board nickname, probe nickname, or ST-Link serial). When exactly one board is connected you can omit it. Name your hardware once with `stm32_set_nickname` — see the multi-board section in [tools.md](tools.md).
+Every tool accepts an optional `probe` argument (board nickname, probe nickname, or ST-Link serial). When exactly one board is connected you can omit it. Name your hardware once with `stm32_set_nickname`: see the multi-board section in [tools.md](tools.md).
 
 ## Serial bridge (optional)
 
