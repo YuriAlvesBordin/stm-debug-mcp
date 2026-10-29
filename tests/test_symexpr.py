@@ -41,3 +41,18 @@ def test_suggest_symbols_fuzzy_match(tmp_path, monkeypatch):
     sug = symexpr.suggest_symbols(str(elf), "g_nvm_cfg")
     assert "nvm_commit" in sug or "nvm_config_is_valid" in sug
     assert "blink" not in sug
+
+
+def test_annotate_hex_decodes_plausible_floats():
+    from stm32_mcp.hexfmt import annotate_hex
+
+    out = annotate_hex(
+        ["0x3e800000", "0x42340000", "0x3fc00000", "0x000000c7",
+         "0x00000bb8", "0x00000000"], width=32)
+    assert "(=0.25)" in out
+    assert "(=45)" in out
+    assert "(=1.5)" in out
+    # Small integers and zero must NOT be annotated as floats.
+    assert "0x000000c7(" not in out
+    assert "0x00000bb8(" not in out
+    assert "0x00000000(" not in out
