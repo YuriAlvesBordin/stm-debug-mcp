@@ -45,7 +45,31 @@ Requirements (STM32CubeIDE, OpenOCD, ARM GCC on PATH) and setup details: [docs/g
 
 ## Scope
 
-Platforms: Linux and macOS. Debugging features depend on ST-Link SWD; serial features on the ST-Link VCP or any USB-UART port.
+Platforms: Linux only. This is the only platform where the project has been tested.
+
+Debugging features depend on ST-Link SWD; serial features on the ST-Link VCP or any USB-UART port.
+
+## STM32 support
+
+| Family | Support | Tested |
+|---|---|---|
+| STM32G0 | Supported | Yes |
+| STM32F0 | Supported | No |
+| STM32F1 | Supported | No |
+| STM32F2 | Supported | No |
+| STM32F3 | Supported | No |
+| STM32F4 | Supported | No |
+| STM32F7 | Supported | No |
+| STM32G4 | Supported | No |
+| STM32H7 | Supported | No |
+| STM32L0 | Supported | No |
+| STM32L1 | Supported | No |
+| STM32L4 | Supported | No |
+| STM32L5 | Supported | No |
+| STM32WB | Supported | No |
+| STM32WL | Supported | No |
+| STM32C0 | Supported | No |
+| STM32U5 | Supported | No |
 
 ## License
 
