@@ -24,13 +24,13 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from .board_map import resolve_probe_full
-from .hexfmt import annotate_hex
 from .debug_tools import (
     _ocd_read_cmd,
     _ocd_write_cmd,
     _width_from_size,
     parse_write_value,
 )
+from .hexfmt import annotate_hex
 from .live_memory import _start_openocd, _tcl_cmd
 from .struct_layout import expand_struct
 from .symexpr import resolve_symbol_flexible
