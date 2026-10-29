@@ -13,6 +13,7 @@ from .live_memory import live_memory_read, live_memory_start, live_memory_stop, 
 from .realtime_debug import (
     debug_backtrace,
     debug_breakpoint,
+    debug_call,
     debug_halt,
     debug_mem,
     debug_registers,
@@ -74,6 +75,9 @@ stm32-mcp: Build, flash, and communicate with STM32 hardware.
 - debug_registers      — Read core registers (PC, LR, SP, xPSR, r0-r12...)
 - debug_mem            — Read/write RAM through the session (works while running)
 - debug_backtrace      — Approximate call stack from PC/LR + stack scan
+- debug_call           — Call a firmware function directly on the target via GDB
+  inferior call (args in R0-R3, return value printed). Needs an ELF-loaded
+  session; functions that block on interrupts/HAL_Delay cannot complete
 - stm32_fus_upgrade    — Upgrade FUS on a bare STM32WB board (step 1 of bringup)
 - stm32_ble_stack_install — Install BLE stack on STM32WB (step 2 of bringup)
 - stm32_fus_bootstrap  — One-shot: FUS upgrade + BLE stack full install
@@ -225,6 +229,7 @@ mcp.tool()(debug_watchpoint)
 mcp.tool()(debug_registers)
 mcp.tool()(debug_mem)
 mcp.tool()(debug_backtrace)
+mcp.tool()(debug_call)
 mcp.tool()(stm32_fus_upgrade)
 mcp.tool()(stm32_ble_stack_install)
 mcp.tool()(stm32_fus_bootstrap)

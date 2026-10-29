@@ -34,7 +34,7 @@ from .hexfmt import annotate_hex
 from .live_memory import _tcl_cmd
 from .struct_layout import expand_struct
 from .symexpr import resolve_symbol_flexible
-from .toolchain import find_addr2line, find_nm
+from .toolchain import find_addr2line, find_gdb, find_nm
 
 _executor = ThreadPoolExecutor(max_workers=2)
 
@@ -1123,3 +1123,128 @@ async def debug_backtrace(session_id: str, words: int = BACKTRACE_WORDS) -> str:
         return await asyncio.wait_for(loop.run_in_executor(_executor, _work), timeout=20)
     except asyncio.TimeoutError:
         return "ERROR: Backtrace timed out."
+
+GDB_REMOTE_PORT = 3333
+GDB_CALL_TIMEOUT = 30
+_EXPR_MAX_LEN = 500
+_FORBIDDEN_IN_EXPR = set("\"'`;\\$|<>\n\r")
+
+def _validate_call_expr(expression: str) -> str | None:
+    """Error message if the expression is unsafe for a gdb -ex argument."""
+    if not expression or not expression.strip():
+        return "expression is required (e.g. 'Scheduler_GetTimeMs()' or 'NvmApp_Save()')."
+    if len(expression) > _EXPR_MAX_LEN:
+        return f"expression too long (max {_EXPR_MAX_LEN} chars)."
+    bad = sorted(set(expression) & _FORBIDDEN_IN_EXPR)
+    if bad:
+        return f"expression contains forbidden characters: {' '.join(bad)}"
+    return None
+
+def _do_debug_call(session: DebugSession, expression: str) -> str:
+    """Blocking debug_call — runs in executor thread.
+
+    Uses GDB in batch mode over the OpenOCD gdb remote port: GDB performs the
+    inferior call safely (scratch stack, save/restore of registers) instead of
+    hand-rolling PC/R0 writes. Runs under the pool connection lock so it never
+    interleaves with flash or one-shot memory ops on the same OpenOCD.
+    """
+    err = _validate_call_expr(expression)
+    if err:
+        return f"ERROR: {err}"
+    if not session.elf_path:
+        return ("ERROR: debug_call needs symbols — start the session with "
+                "debug_session_start(elf_path=...).")
+    gdb = find_gdb()
+    if not gdb:
+        raise FileNotFoundError(
+            "arm-none-eabi-gdb not found. Install the ARM GNU toolchain "
+            "(e.g. 'sudo apt install gdb-multiarch' or 'arm-none-eabi-gdb')."
+        )
+
+    with session.pool_conn.lock:
+        was_running = None
+        try:
+            was_running = _target_state(session) != "halted"
+            if was_running:
+                _checked(session, "halt")
+        except (RuntimeError, OSError, ConnectionError):
+            pass
+
+        try:
+            proc = subprocess.run(
+                [
+                    gdb, "-batch", "-q",
+                    "-ex", "set confirm off",
+                    "-ex", "set pagination off",
+                    "-ex", f"target extended-remote 127.0.0.1:{GDB_REMOTE_PORT}",
+                    "-ex", f"print {expression}",
+                    "-ex", "detach",
+                    session.elf_path,
+                ],
+                capture_output=True, text=True, timeout=GDB_CALL_TIMEOUT,
+            )
+            out = (proc.stdout or "") + (proc.stderr or "")
+            timed_out = False
+        except subprocess.TimeoutExpired:
+            out = ""
+            timed_out = True
+
+        # Restore the state we found: GDB 'detach' usually resumes the target,
+        # but if it is still halted and the caller had it running, resume it.
+        try:
+            if was_running and _target_state(session) == "halted":
+                _checked(session, "resume")
+        except (RuntimeError, OSError, ConnectionError):
+            pass
+
+    if timed_out:
+        return (
+            f"ERROR: Call timed out after {GDB_CALL_TIMEOUT}s. If the function "
+            f"blocks (HAL_Delay, waits on interrupts), it cannot complete while "
+            f"the core is halted under the debugger."
+        )
+
+    m = re.search(r"^\$\d+\s*=\s*(.+)$", out, re.M)
+    result = m.group(1).strip() if m else None
+    lines = [l for l in out.splitlines() if l.strip()]
+    tail = "\n".join(lines[-15:])
+    if result is None:
+        return f"Call failed:\n{tail}"
+    return f"{expression} -> {result}\n\n{tail}" if tail else f"{expression} -> {result}"
+
+async def debug_call(session_id: str, expression: str) -> str:
+    """Call a firmware function (or read an expression) directly on the target.
+
+    Executes a C expression on the halted target via GDB's inferior call
+    mechanism over the session's OpenOCD gdb port: arguments in R0-R3, return
+    value in R0, run from a scratch stack. Works for functions like
+    'NvmApp_Save()', 'pid_set_gains(&g_app.motor.pid, 1.5, 0.5, 0.08)' or
+    'HAL_RCC_GetHCLKFreq()'.
+
+    Requires an ELF-loaded debug session. The core must be able to run: if it
+    was running, it is halted for the call and resumed afterwards; a function
+    that blocks on interrupts or HAL_Delay cannot complete (the debug session
+    keeps them stopped). Peripheral interrupts remain enabled during the call.
+
+    Args:
+        session_id: Session ID from debug_session_start.
+        expression: C expression to evaluate on the target, e.g.
+            'MyFunc(1, 2.5, &x)' or 'g_app.scheduler.taskCount'.
+
+    Returns:
+        The expression result (GDB value syntax) and GDB output tail.
+    """
+    session = _get_session(session_id)
+    if session is None:
+        return "ERROR: Unknown session. Use debug_session_start first."
+
+    loop = asyncio.get_event_loop()
+    try:
+        return await asyncio.wait_for(
+            loop.run_in_executor(
+                _executor, lambda: _do_debug_call(session, expression.strip()),
+            ),
+            timeout=GDB_CALL_TIMEOUT + 10,
+        )
+    except asyncio.TimeoutError:
+        return "ERROR: debug_call timed out."
