@@ -6,8 +6,8 @@ import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
+from . import ocd_pool
 from .board_map import resolve_probe_full
-from .toolchain import run_openocd
 
 _executor = ThreadPoolExecutor(max_workers=2)
 
@@ -36,20 +36,22 @@ def _do_flash(
         prog_parts.append("verify")
     if reset:
         prog_parts.append("reset")
-    prog_parts.append("exit")
+    # No "exit": the shared OpenOCD connection stays up for other tools.
     prog_cmd = " ".join(prog_parts)
 
     try:
-        output = run_openocd(sn, target_cfg, [prog_cmd], timeout=FLASH_TIMEOUT, chipid=chipid)
+        conn = ocd_pool.acquire(sn, target_cfg, chipid)
+        output = ocd_pool.run_cmds(conn, [prog_cmd], timeout_s=FLASH_TIMEOUT)
     except subprocess.TimeoutExpired:
         return f"ERROR: Flash timed out after {FLASH_TIMEOUT}s."
-    except FileNotFoundError as e:
+    except (FileNotFoundError, RuntimeError) as e:
         return f"ERROR: {e}"
 
     if "no device found" in output.lower() or "unable to find" in output.lower():
         return "ERROR: No ST-Link detected. Check USB connection and board power."
 
-    if "read protection" in output.lower():
+    low = output.lower()
+    if "read protection" in low or "read protected" in low:
         return (
             "ERROR: Chip is read-protected. Mass erase needed to unlock.\n"
             "WARNING: This erases all flash contents."
@@ -97,10 +99,11 @@ def _do_board_info(sn: str = "", target_cfg: str = "", chipid: int = 0) -> str:
         return "ERROR: Could not resolve probe. Use stm32_list_probes to see connected boards."
 
     try:
-        output = run_openocd(sn, target_cfg, ["init"], timeout=INFO_TIMEOUT, chipid=chipid)
+        conn = ocd_pool.acquire(sn, target_cfg, chipid)
+        output = ocd_pool.run_cmds(conn, ["init"], timeout_s=INFO_TIMEOUT)
     except subprocess.TimeoutExpired:
         return f"ERROR: Board info timed out after {INFO_TIMEOUT}s."
-    except FileNotFoundError as e:
+    except (FileNotFoundError, RuntimeError) as e:
         return f"ERROR: {e}"
 
     if "no device found" in output.lower() or "unable to find" in output.lower():
