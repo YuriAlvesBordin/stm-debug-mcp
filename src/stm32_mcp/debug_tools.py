@@ -34,6 +34,10 @@ def _resolve_symbol(elf_path: str, symbol_name: str) -> tuple[int, int] | None:
     Output format: 20000304 00000010 B blink
                    (address) (size)  (type) (name)
 
+    LTO builds rename statics with optimizer suffixes ('name.3',
+    'fn.constprop.0.isra.0'); exact match wins, otherwise the symbol whose
+    LTO-stripped base equals the requested name is used.
+
     Returns (address, size) or None if not found.
     """
     nm = find_nm()
@@ -48,25 +52,33 @@ def _resolve_symbol(elf_path: str, symbol_name: str) -> tuple[int, int] | None:
     except (subprocess.TimeoutExpired, OSError):
         return None
 
+    exact = None
+    renamed = None
     for line in result.stdout.splitlines():
         parts = line.strip().split()
 
+        hit = None
         if len(parts) >= 4 and parts[3] == symbol_name:
             try:
-                addr = int(parts[0], 16)
-                size = int(parts[1], 16)
-                return addr, size
+                hit = (int(parts[0], 16), int(parts[1], 16))
             except ValueError:
                 continue
-
-        if len(parts) >= 3 and parts[2] == symbol_name:
+        elif len(parts) >= 3 and parts[2] == symbol_name:
             try:
-                addr = int(parts[0], 16)
-                return addr, 4
+                hit = (int(parts[0], 16), 4)
             except ValueError:
                 continue
-
-    return None
+        elif renamed is None and len(parts) >= 4 and _lto_base_name(parts[3]) == symbol_name:
+            try:
+                renamed = (int(parts[0], 16), int(parts[1], 16))
+            except ValueError:
+                continue
+        if hit is not None:
+            if exact is None:
+                exact = hit
+    if exact is not None:
+        return exact
+    return renamed
 
 def _width_from_size(size: int) -> int:
     """Auto-detect access width from symbol size."""

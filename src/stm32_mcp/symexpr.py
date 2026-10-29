@@ -249,7 +249,33 @@ async def symbol_info(elf_path: str, expressions: str) -> str:
     suggestions: dict = {}
     for e in exprs:
         r = results.get(e)
+        if r is None and is_path_expression(e):
+            # LTO builds drop DWARF entries for renamed statics, so a path
+            # rooted at one (e.g. "filtered_rate.prev") fails in GDB even
+            # though the symtab has the address. Report that clearly.
+            sug = suggest_symbols(elf_path, e)
+            suggestions[e] = sug
+            hint = ""
+            if sug:
+                hint = " — root symbol missing from DWARF (LTO build?). Symtab candidates: " + ", ".join(sug)
+            lines.append(f"{e}: NOT FOUND{hint}")
+            continue
         if r is None:
+            # Plain name: fall back to the nm symtab. LTO keeps addresses in
+            # the symtab (often under renamed symbols like "name.3") even
+            # when the DWARF entry is gone, so an address-only hit still
+            # enables raw memory reads.
+            from .debug_tools import _resolve_symbol
+
+            fallback = _resolve_symbol(elf_path, e)
+            if fallback is not None:
+                addr, size = fallback
+                lines.append(
+                    f"{e}: 0x{addr:08X}  size: {size or '?'}  "
+                    f"type: (unknown — DWARF entry missing, likely LTO build; "
+                    f"symtab fallback, read raw with stm32_read_memory)"
+                )
+                continue
             sug = suggest_symbols(elf_path, e)
             suggestions[e] = sug
             hint = ""
@@ -260,9 +286,9 @@ async def symbol_info(elf_path: str, expressions: str) -> str:
             else:
                 hint = " (could not read symbols from ELF)"
             lines.append(f"{e}: NOT FOUND{hint}")
-        else:
-            type_part = f"  type: {r.type_name}" if r.type_name else ""
-            lines.append(f"{e}: 0x{r.address:08X}  size: {r.size or '?'}{type_part}")
+            continue
+        type_part = f"  type: {r.type_name}" if r.type_name else ""
+        lines.append(f"{e}: 0x{r.address:08X}  size: {r.size or '?'}{type_part}")
     lines.append(
         "\nStructs: pass sub-fields as new expressions (e.g. \""
         + exprs[0] + ".<field>\") or monitor them directly with "
