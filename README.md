@@ -1,10 +1,10 @@
-# stm-debug-mcp
+# stm32-swd-mcp
 
 [![CI](https://github.com/YuriAlvesBordin/stm-debug-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/YuriAlvesBordin/stm-debug-mcp/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-An MCP (Model Context Protocol) server that lets AI coding agents build, flash, debug, and communicate with STM32 microcontrollers over ST-Link, end to end, in the loop.
+An MCP (Model Context Protocol) server designed for STM32 microcontrollers. It lets AI coding agents build firmware, flash it over SWD, debug it with OpenOCD, and communicate over serial, end to end, in the loop.
 
 Point it at a CubeIDE project and a connected board, and your agent can compile firmware, flash it over SWD, exercise it over the serial VCP, watch variables live, set hardware breakpoints, and triage faults: without leaving the conversation.
 
