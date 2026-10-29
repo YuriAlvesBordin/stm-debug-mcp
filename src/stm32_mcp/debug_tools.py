@@ -7,6 +7,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 from .board_map import resolve_probe_full
+from .hexfmt import annotate_hex
 from .symexpr import resolve_symbol_flexible
 from .toolchain import find_nm, run_openocd
 
@@ -161,7 +162,7 @@ def _do_read_memory(
     else:
         label = addr_str
 
-    return f"{label}: {' '.join(values[:count])}"
+    return f"{label}: {annotate_hex(values[:count], width)}"
 
 def _do_write_memory(
     address: str,

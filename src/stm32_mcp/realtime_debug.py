@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from .board_map import resolve_probe_full
+from .hexfmt import annotate_hex
 from .debug_tools import (
     _ocd_read_cmd,
     _ocd_write_cmd,
@@ -1057,7 +1058,7 @@ async def debug_mem(
                                 v for v in m.group(1).split()
                                 if re.fullmatch(r"[0-9a-fA-F]+", v)
                             )
-                    lines.append(f"{name} (0x{t_addr:08X}): {' '.join(hexvals) or '(unreadable)'}")
+                    lines.append(f"{name} (0x{t_addr:08X}): {annotate_hex(hexvals, t_width) or '(unreadable)'}")
                 return "\n".join(lines)
             elif action == "write":
                 if not value:
