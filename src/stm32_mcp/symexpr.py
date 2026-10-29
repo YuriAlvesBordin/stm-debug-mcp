@@ -8,13 +8,14 @@ expressions; results are cached per ELF (mtime-keyed).
 """
 
 import asyncio
+import difflib
 import os
 import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
-from .toolchain import find_gdb
+from .toolchain import find_gdb, find_nm
 
 GDB_TIMEOUT = 20
 _executor = ThreadPoolExecutor(max_workers=1)
@@ -143,6 +144,71 @@ def resolve_symbol_flexible(elf_path: str, name: str) -> tuple:
         return None
     return resolved.address, resolved.size or 4
 
+_SYM_CACHE: dict = {}
+
+def _elf_symbols(elf_path: str) -> list:
+    """All defined symbol names in the ELF (data/bss/object symbols first),
+    cached per ELF mtime. Used to suggest near-misses for unknown names."""
+    try:
+        mtime = os.path.getmtime(elf_path)
+    except OSError:
+        return []
+    key = (elf_path, mtime)
+    if key in _SYM_CACHE:
+        return _SYM_CACHE[key]
+
+    names = []
+    nm = find_nm()
+    if nm and os.path.isfile(elf_path):
+        try:
+            proc = subprocess.run(
+                [nm, "--defined-only", elf_path],
+                capture_output=True, text=True, timeout=10,
+            )
+            for line in proc.stdout.splitlines():
+                parts = line.strip().split()
+                # nm lines are "addr type name" (no size) or "addr size type name".
+                if len(parts) >= 3 and len(parts[-2]) == 1 and parts[-2].isalpha():
+                    names.append(parts[-1])
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+    _SYM_CACHE[key] = names
+    return names
+
+def suggest_symbols(elf_path: str, expr: str, limit: int = 5) -> list:
+    """Near-miss symbol names for an unresolved expression.
+
+    Extracts the identifier tokens of the expression (root + field names),
+    then ranks ELF symbols by substring containment and difflib similarity.
+    """
+    # Split snake_case names into sub-tokens so "g_nvm_cfg" matches "nvm_commit".
+    tokens = set()
+    for tok in re.findall(r"[A-Za-z_]\w*", expr):
+        tokens.add(tok.lower())
+        tokens.update(t for t in tok.lower().split("_") if len(t) > 2)
+    if not tokens:
+        return []
+    names = _elf_symbols(elf_path)
+    if not names:
+        return []
+
+    scored: dict = {}
+    for name in names:
+        low = name.lower()
+        sub = [t for t in low.split("_") if len(t) > 2]
+        best = 0.0
+        for tok in tokens:
+            if tok in low or low in tok:
+                best = max(best, 0.9)
+            elif any(tok == s or tok in s for s in sub):
+                best = max(best, 0.8)
+            else:
+                best = max(best, difflib.SequenceMatcher(None, tok, low).ratio())
+        if best >= 0.6:
+            scored[name] = best
+    ranked = sorted(scored, key=scored.get, reverse=True)
+    return ranked[:limit]
+
 async def symbol_info(elf_path: str, expressions: str) -> str:
     """Resolve C expressions against the firmware ELF — the one-call replacement
     for grepping headers and hand-running GDB.
@@ -180,10 +246,20 @@ async def symbol_info(elf_path: str, expressions: str) -> str:
     )
 
     lines = []
+    suggestions: dict = {}
     for e in exprs:
         r = results.get(e)
         if r is None:
-            lines.append(f"{e}: NOT FOUND (check spelling — static locals are not visible)")
+            sug = suggest_symbols(elf_path, e)
+            suggestions[e] = sug
+            hint = ""
+            if sug:
+                hint = " — did you mean: " + ", ".join(sug)
+            elif _elf_symbols(elf_path):
+                hint = " (symbol does not exist in this ELF — static locals are not visible; list symbols with: arm-none-eabi-nm <elf>)"
+            else:
+                hint = " (could not read symbols from ELF)"
+            lines.append(f"{e}: NOT FOUND{hint}")
         else:
             type_part = f"  type: {r.type_name}" if r.type_name else ""
             lines.append(f"{e}: 0x{r.address:08X}  size: {r.size or '?'}{type_part}")

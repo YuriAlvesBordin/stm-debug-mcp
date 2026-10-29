@@ -41,6 +41,8 @@ class ResolvedVariable:
     width: int
     is_float: bool = False
     count: int = 1
+    type_name: str = ""
+    enum_values: dict | None = None
 
 @dataclass
 class LiveMemorySession:
@@ -201,6 +203,8 @@ def _resolve_variables(variables_json: str, elf_path: str) -> list[ResolvedVaria
                             width=w,
                             count=c,
                             is_float=f.is_float,
+                            type_name=f.type_name,
+                            enum_values=f.enum_values,
                         ))
                     continue
 
@@ -213,7 +217,8 @@ def _resolve_variables(variables_json: str, elf_path: str) -> list[ResolvedVaria
             ))
         elif isinstance(spec, dict):
 
-            is_float = spec.get("type", "").lower() == "float"
+            type_hint = spec.get("type", "").strip()
+            is_float = type_hint.lower() == "float"
 
             if "symbol" in spec:
                 sym_name = spec["symbol"]
@@ -240,12 +245,15 @@ def _resolve_variables(variables_json: str, elf_path: str) -> list[ResolvedVaria
                                 width=w,
                                 count=c,
                                 is_float=f.is_float,
+                                type_name=f.type_name,
+                                enum_values=f.enum_values,
                             ))
                         continue
 
                 resolved.append(ResolvedVariable(
                     name=name, address=addr, width=width, count=count,
                     is_float=is_float,
+                    type_name=type_hint,
                 ))
             elif "address" in spec:
                 addr = int(spec["address"], 0)
@@ -253,6 +261,7 @@ def _resolve_variables(variables_json: str, elf_path: str) -> list[ResolvedVaria
                 width = spec.get("width", 32)
                 resolved.append(ResolvedVariable(
                     name=name, address=addr, width=width, is_float=is_float,
+                    type_name=type_hint,
                 ))
             else:
                 raise ValueError(f"Variable dict must have 'symbol' or 'address': {spec}")
@@ -284,10 +293,23 @@ def _parse_mdw_words(response: str) -> list:
                     addr += 4
     return out
 
+_SIGNED_TYPES = {
+    "int8_t", "int16_t", "int32_t", "int64_t",
+    "signed char", "short", "int", "long",
+}
+
+_BOOL_TYPES = {"_Bool", "bool"}
+
 def _finalize_value(var: ResolvedVariable, raw: int):
-    """Interpret a raw word (or word pair) as float/int per the variable spec."""
+    """Interpret a raw word (or word pair) as float/int/enum/bool per the spec."""
     if var.is_float and var.width == 32 and var.count == 1:
         return round(struct.unpack("<f", struct.pack("<I", raw))[0], 6)
+    if var.enum_values is not None and var.count == 1:
+        return var.enum_values.get(raw, raw)
+    if var.type_name in _BOOL_TYPES and var.count == 1:
+        return "true" if raw else "false"
+    if var.type_name in _SIGNED_TYPES and var.count == 1 and raw >= 1 << (var.width - 1):
+        return raw - (1 << var.width)
     return raw
 
 def _build_read_groups(variables: list) -> tuple:
@@ -717,7 +739,7 @@ async def live_memory_write(
             return f"ERROR: {resp[4:].strip()}"
         fmt = {8: "02X", 16: "04X", 32: "08X"}[resolved_width]
         raw = f"0x{write_val:{fmt}}"
-        shown = value.strip() if value.strip().lower() != raw else raw
+        shown = value.strip() if value.strip().lower() != raw else str(write_val)
         return f"Wrote {shown} to {label} (raw {raw}) — live polling continues; next reads show the new value."
 
     loop = asyncio.get_event_loop()

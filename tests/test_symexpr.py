@@ -19,3 +19,25 @@ def test_array_index_is_a_path():
 def test_whitespace_is_ignored():
     assert is_path_expression("  g_app.x  ")
     assert not is_path_expression("  blink  ")
+
+
+def test_suggest_symbols_fuzzy_match(tmp_path, monkeypatch):
+    import stm32_mcp.symexpr as symexpr
+
+    class FakeProc:
+        stdout = (
+            "08001550 T NvmApp_CommitTask\n"
+            "08001412 T nvm_commit\n"
+            "20000304 00000010 B blink\n"
+            "0800043c t nvm_config_is_valid\n"
+        )
+
+    monkeypatch.setattr(symexpr, "find_nm", lambda: "nm")
+    monkeypatch.setattr(
+        symexpr.subprocess, "run", lambda *a, **k: FakeProc()
+    )
+    elf = tmp_path / "fw.elf"
+    elf.write_bytes(b"x")
+    sug = symexpr.suggest_symbols(str(elf), "g_nvm_cfg")
+    assert "nvm_commit" in sug or "nvm_config_is_valid" in sug
+    assert "blink" not in sug

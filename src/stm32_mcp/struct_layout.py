@@ -26,6 +26,8 @@ class FieldInfo:
     offset: int
     size: int
     is_float: bool = False
+    type_name: str = ""
+    enum_values: dict | None = None
 
 def _run_gdb_ptype(gdb: str, elf_path: str, type_names: list[str]) -> str:
     """Run GDB batch with ptype /o for each type name. Returns combined stdout."""
@@ -79,10 +81,21 @@ def _split_ptype_blocks(output: str) -> list[str]:
         blocks.append("\n".join(current))
     return blocks
 
+def _parse_enum(ptype_output: str) -> dict | None:
+    """Parse a ptype block into {value: enumerator_name} if it is an enum."""
+    if "enum" not in ptype_output:
+        return None
+    out = {}
+    for name, value in re.findall(r"(\w+)\s*=\s*(-?\d+)", ptype_output):
+        out[int(value)] = name
+    return out or None
+
 def expand_struct(elf_path: str, symbol_name: str) -> list[FieldInfo] | None:
     """Use GDB ptype /o to get struct field layout. Returns None for scalars.
 
     For nested structs, recursively expands fields with dotted name paths.
+    Enum-typed fields get a value-to-name mapping so monitors can display
+    enumerator names instead of raw integers.
     """
     gdb = find_gdb()
     if not gdb:
@@ -116,6 +129,18 @@ def expand_struct(elf_path: str, symbol_name: str) -> list[FieldInfo] | None:
             for type_name, block in zip(nested_types, nested_blocks):
                 nested_layouts[type_name] = _parse_ptype_fields(block)
 
+    enum_types = sorted({
+        t for _, _, t, _ in top_fields
+        if t not in _PRIMITIVE_TYPES and nested_layouts.get(t) is None
+    })
+    enum_maps: dict[str, dict] = {}
+    if enum_types:
+        enum_output = _run_gdb_ptype(gdb, elf_path, enum_types)
+        for type_name, block in zip(enum_types, _split_ptype_blocks(enum_output)):
+            mapping = _parse_enum(block)
+            if mapping is not None:
+                enum_maps[type_name] = mapping
+
     result: list[FieldInfo] = []
     for offset, size, type_name, field_name in top_fields:
         nested = nested_layouts.get(type_name)
@@ -128,6 +153,8 @@ def expand_struct(elf_path: str, symbol_name: str) -> list[FieldInfo] | None:
                     offset=offset + n_offset,
                     size=min(n_size, 4),
                     is_float=n_type == "float" and n_size <= 4,
+                    type_name=n_type,
+                    enum_values=enum_maps.get(n_type),
                 ))
                 if len(result) >= MAX_FIELDS:
                     break
@@ -137,6 +164,8 @@ def expand_struct(elf_path: str, symbol_name: str) -> list[FieldInfo] | None:
                 offset=offset,
                 size=min(size, 4),
                 is_float=is_float,
+                type_name=type_name,
+                enum_values=enum_maps.get(type_name),
             ))
 
         if len(result) >= MAX_FIELDS:

@@ -40,7 +40,7 @@ Prefer symbol paths over raw addresses everywhere; use `symbol_info` when unsure
 | `live_memory_write` | Edit a variable through the running session: no stop/restart (CubeIDE Live Expressions, with write access). |
 | `live_memory_stop` | Stop polling, return session stats. |
 
-Passing a struct symbol auto-expands all fields into dotted names using DWARF info (`blink.state`, `blink.mode`); use `{"symbol": ..., "expand": false}` for raw bytes. Only one live session per probe; stop it before flashing. Sessions auto-reconnect on transient ST-Link drops.
+Passing a struct symbol auto-expands all fields into dotted names using DWARF info (`blink.state`, `blink.mode`); use `{"symbol": ..., "expand": false}` for raw bytes. Values are display-decoded per DWARF type: floats as decimals, signed integers sign-extended (`-1`, not `4294967295`), bools as `true`/`false`, and enums as enumerator names (`state=RUN`) with the raw number as fallback. Only one live session per probe; stop it before flashing. Sessions auto-reconnect on transient ST-Link drops.
 
 ## Real-time debug sessions
 
