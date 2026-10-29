@@ -6,10 +6,11 @@ registers, wait-for-breakpoint, and a heuristic stack-scan backtrace.
 
 All tool families share one OpenOCD process per probe (see ocd_pool): debug
 sessions hold a lease on it, live_memory and one-shot tools (memory reads,
-flash) run on the same connection. No connect/disconnect juggling between
-tools is needed. Note: halting the core (breakpoints, debug_halt) naturally
-affects anything reading the target — that is CPU state, not connection
-contention.
+flash) run on the same connection, and a debug session and a live_memory
+session coexist (each holds its own lease). No connect/disconnect juggling
+between tools is needed. Note: halting the core (breakpoints, debug_halt)
+naturally affects anything reading the target — that is CPU state, not
+connection contention; live polls tolerate the window and keep running.
 """
 
 import asyncio

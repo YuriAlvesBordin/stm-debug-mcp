@@ -11,8 +11,8 @@ multiplexes everything over its TCL port:
   - one-shot tools (memory read/write, flash, board info) send their
     commands through the shared connection instead of spawning processes;
   - debug sessions and live memory sessions take a *lease* on the shared
-    connection (refcounted), so they coexist instead of excluding each
-    other;
+    connection (refcounted), so a debug session, a live memory session and
+    one-shot tools all coexist on the same probe;
   - leases pin the connection (the idle reaper never kills it while a
     session holds one); an idle connection with no leases is reaped after
     OCD_POOL_IDLE_S so the probe is freed for other host tools.

@@ -300,6 +300,10 @@ def _try_reconnect(session: LiveMemorySession, max_retries: int = 3) -> bool:
             return False
 
         try:
+            # Drop the old lease first so the refcount never creeps up when
+            # the pool hands back the same SharedOcd object.
+            if session.pool_conn is not None:
+                ocd_pool.release_lease(session.pool_conn)
             conn = ocd_pool.acquire_lease(session.sn, session.target_cfg, session.chipid)
             sock = ocd_pool.open_socket(conn)
             session.pool_conn = conn
@@ -322,12 +326,17 @@ def _run_session(session: LiveMemorySession) -> None:
     groups, singles = _build_read_groups(session.variables)
 
     def _poll_once() -> dict:
-        """One full read pass; raises ConnectionError on a dead OpenOCD link."""
+        """One full read pass; raises ConnectionError on a dead OpenOCD link.
+
+        Each read takes the pool connection lock so a poll never interleaves
+        with a flash or debug command on the shared OpenOCD (the poll may
+        then wait out a long flash — that is the point).
+        """
         values: dict = {}
         for group in groups:
             start = group[0].address
             words = (group[-1].address + 4 - start) // 4
-            with session.tcl_lock:
+            with session.tcl_lock, session.pool_conn.lock:
                 resp = _tcl_cmd(session.tcl_sock, f"mdw 0x{start:08X} {words}")
             window = dict(_parse_mdw_words(resp))
             for var in group:
@@ -337,7 +346,7 @@ def _run_session(session: LiveMemorySession) -> None:
                     values[var.name] = "ERROR: read failed"
                     session.error_count += 1
         for var in singles:
-            with session.tcl_lock:
+            with session.tcl_lock, session.pool_conn.lock:
                 resp = _tcl_cmd(
                     session.tcl_sock,
                     f"{_ocd_read_cmd(var.width)} 0x{var.address:08X} {var.count}",
@@ -412,8 +421,10 @@ async def live_memory_start(
     can be edited while the session runs via live_memory_write.
 
     One live_memory session per probe at a time. The session shares the
-    probe's pooled OpenOCD connection — memory reads and flash work while
-    it runs; no connect/disconnect juggling needed.
+    probe's pooled OpenOCD connection — memory reads, flash and debug
+    sessions all work while it runs; no connect/disconnect juggling needed.
+    If a debug session halts or resets the core, polls during that window
+    record per-read errors; the session itself survives.
 
     Args:
         variables: JSON array of variables to monitor. Elements can be:
@@ -439,12 +450,6 @@ async def live_memory_start(
     sn, target_cfg, chipid = resolve_probe_full(probe)
     if not sn or not target_cfg:
         return "ERROR: Could not resolve probe. Use stm32_list_probes to see connected boards."
-
-    from .realtime_debug import _debug_sessions
-    dbg_conflict = [sid for sid, s in _debug_sessions.items() if s.sn == sn]
-    if dbg_conflict:
-        return (f"ERROR: debug session {dbg_conflict[0]} is running on this probe. "
-                f"Stop it with debug_session_stop first.")
 
     try:
         resolved = _resolve_variables(variables, elf_path)

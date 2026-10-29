@@ -154,7 +154,9 @@ stm32-mcp: Build, flash, and communicate with STM32 hardware.
   polls show the new value, no stop/restart needed (this is the equivalent of
   CubeIDE Live Expressions, with write access)
 - live_memory_stop releases the session's lease and returns session stats
-- One live session per probe; it coexists with stm32_read/write_memory, flash and debug sessions (shared connection)
+- One live session per probe; it coexists with stm32_read/write_memory,
+  flash and debug sessions (shared connection); polls during a halt/reset
+  window record per-read errors and the session keeps running
 - Output is JSONL at the specified path (default /tmp/live_memory_<id>.jsonl)
 - **Struct auto-expansion**: Pass a struct variable name (e.g. `"blink"`) and all
   fields are automatically expanded with dotted names (e.g. `blink.state`,
@@ -178,8 +180,14 @@ stm32-mcp: Build, flash, and communicate with STM32 hardware.
 - Watchpoints use the DWT unit (few comparators; Cortex-M0/M0+ may have none)
 - debug_mem reads RAM while the core is RUNNING (real-time) or halted —
   it reuses the session's OpenOCD instead of launching a second instance
-- Only one debug session OR one live_memory session per probe, never both
-- Stop the session before flashing or using stm32_read/write_memory (TCL port conflict)
+- A debug session, a live_memory session and one-shot tools all coexist on
+  the same probe — the pool multiplexes one OpenOCD per probe, no stopping
+  or connect/disconnect juggling between tools
+- Halting/resetting/stepping from the debug session pauses firmware, which
+  live polls and concurrent reads observe as transient errors in that
+  window — expected CPU state, not connection contention
+- Prefer debug_mem while a debug session is open (it knows the session's
+  ELF); stm32_read/write_memory and flash also work during a session
 - Backtrace is a heuristic (PC, LR, then thumb return addresses found in the
   stack window) — verify against the map file when it matters
 
