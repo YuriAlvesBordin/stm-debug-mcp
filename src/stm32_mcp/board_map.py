@@ -16,7 +16,8 @@ import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
-from .toolchain import find_st_info, openocd_target_cfg, run_openocd
+from . import ocd_pool
+from .toolchain import find_st_info, openocd_target_cfg
 
 _executor = ThreadPoolExecutor(max_workers=2)
 
@@ -209,11 +210,10 @@ def _enumerate_probes() -> list[dict]:
             continue
 
         try:
-            ocd_out = run_openocd(
-                sn, target_cfg,
-                ["init", f"mdw 0x{uid_addr:08X} 3"],
-                timeout=ENUMERATE_TIMEOUT,
-                chipid=chipid,
+            ocd_out = ocd_pool.run_cmds(
+                ocd_pool.acquire(sn, target_cfg, chipid),
+                [f"mdw 0x{uid_addr:08X} 3"],
+                timeout_s=ENUMERATE_TIMEOUT,
             )
 
             fw_match = re.search(r'STLINK\s+(V\S+)', ocd_out)

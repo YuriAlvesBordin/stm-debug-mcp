@@ -138,18 +138,19 @@ stm32-mcp: Build, flash, and communicate with STM32 hardware.
 - Optional on send: "expect" (substring match), "read_timeout", "line_ending"
 - on_failure: "continue" (default) or "stop"
 - filter_responses: true to match expect only against >-prefixed VCP lines
-- Timing note: each mem op still launches OpenOCD (~tens of ms overhead), so
-  very tight memory-to-memory timing is approximate. Delays themselves are accurate.
+- Timing note: mem ops reuse the pooled OpenOCD connection, but per-op TCL
+  round-trips mean very tight memory-to-memory timing is approximate. Delays
+  themselves are accurate.
 
 ## Live Memory Monitoring (Live Expressions)
 
-- live_memory_start opens a persistent OpenOCD connection and polls variables via SWD
+- live_memory_start polls variables via SWD over the probe's pooled OpenOCD connection
 - live_memory_read returns recent values from an in-memory ring buffer
 - live_memory_write EDITS a variable through the running session — the next
   polls show the new value, no stop/restart needed (this is the equivalent of
   CubeIDE Live Expressions, with write access)
-- live_memory_stop kills OpenOCD and returns session stats
-- Only one session per probe — stop before flashing or using stm32_read/write_memory
+- live_memory_stop releases the session's lease and returns session stats
+- One live session per probe; it coexists with stm32_read/write_memory, flash and debug sessions (shared connection)
 - Output is JSONL at the specified path (default /tmp/live_memory_<id>.jsonl)
 - **Struct auto-expansion**: Pass a struct variable name (e.g. `"blink"`) and all
   fields are automatically expanded with dotted names (e.g. `blink.state`,

@@ -15,16 +15,11 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
+from . import ocd_pool
 from .board_map import resolve_probe_full
 from .debug_tools import _ocd_read_cmd, _ocd_write_cmd, _width_from_size, parse_write_value
 from .struct_layout import expand_struct
 from .symexpr import resolve_symbol_flexible
-from .toolchain import (
-    _HLA_NEWTAP_FIX,
-    _openocd_scripts_dir,
-    find_openocd,
-    openocd_workarea,
-)
 
 _executor = ThreadPoolExecutor(max_workers=2)
 
@@ -57,6 +52,7 @@ class LiveMemorySession:
 
     process: subprocess.Popen | None = None
     tcl_sock: socket.socket | None = None
+    pool_conn: ocd_pool.SharedOcd | None = None
     thread: threading.Thread | None = None
     stop_event: threading.Event = field(default_factory=threading.Event)
     tcl_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -84,66 +80,12 @@ def _pdeathsig():
 
     return _set
 
-def _start_openocd(sn: str, target_cfg: str, chipid: int) -> tuple[subprocess.Popen, socket.socket]:
-    """Start OpenOCD as a persistent subprocess and connect to its TCL port."""
-    openocd = find_openocd()
-    if not openocd:
-        raise FileNotFoundError("OpenOCD not found. Install via: brew install open-ocd")
-
-    cmd = [openocd]
-
-    scripts_dir = _openocd_scripts_dir(openocd)
-    if scripts_dir:
-        cmd.extend(["-s", scripts_dir])
-
-    cmd.extend([
-        "-f", "interface/stlink.cfg",
-        "-c", f"adapter serial {sn}",
-        "-c", "transport select hla_swd",
-    ])
-
-    if scripts_dir:
-        cmd.extend(["-c", _HLA_NEWTAP_FIX])
-
-    wa = openocd_workarea(chipid) if chipid else None
-    if wa is not None:
-        cmd.extend(["-c", f"set WORKAREASIZE 0x{wa:X}"])
-
-    cmd.extend(["-f", f"target/{target_cfg}"])
-    cmd.extend(["-c", "init"])
-
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        preexec_fn=_pdeathsig(),
-    )
-
-    deadline = time.monotonic() + CONNECT_TIMEOUT
-    sock = None
-
-    while time.monotonic() < deadline:
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(2.0)
-            s.connect(("127.0.0.1", TCL_PORT))
-            sock = s
-            break
-        except (ConnectionRefusedError, OSError):
-            s.close()
-            if proc.poll() is not None:
-                _, stderr = proc.communicate(timeout=2)
-                raise RuntimeError(
-                    f"OpenOCD exited immediately (code {proc.returncode}):\n{stderr.decode(errors='replace').strip()}"
-                )
-            time.sleep(0.2)
-
-    if sock is None:
-        proc.terminate()
-        proc.wait(timeout=5)
-        raise RuntimeError(f"Could not connect to OpenOCD TCL port {TCL_PORT} within {CONNECT_TIMEOUT}s")
-
-    return proc, sock
+def _pool_session_start(sn: str, target_cfg: str, chipid: int) -> tuple:
+    """Blocking start — runs in executor thread. Takes a lease on the probe's
+    shared OpenOCD connection and opens a private TCL socket on it."""
+    conn = ocd_pool.acquire_lease(sn, target_cfg, chipid)
+    sock = ocd_pool.open_socket(conn)
+    return conn, sock
 
 def _tcl_cmd(sock: socket.socket, cmd: str) -> str:
     """Send a command to OpenOCD's TCL interface and return the response."""
@@ -347,16 +289,7 @@ def _try_reconnect(session: LiveMemorySession, max_retries: int = 3) -> bool:
         except OSError:
             pass
         session.tcl_sock = None
-    if session.process:
-        try:
-            session.process.terminate()
-            session.process.wait(timeout=3)
-        except Exception:
-            try:
-                session.process.kill()
-            except Exception:
-                pass
-        session.process = None
+    session.process = None
 
     for attempt in range(max_retries):
         if session.stop_event.is_set():
@@ -367,8 +300,10 @@ def _try_reconnect(session: LiveMemorySession, max_retries: int = 3) -> bool:
             return False
 
         try:
-            proc, sock = _start_openocd(session.sn, session.target_cfg, session.chipid)
-            session.process = proc
+            conn = ocd_pool.acquire_lease(session.sn, session.target_cfg, session.chipid)
+            sock = ocd_pool.open_socket(conn)
+            session.pool_conn = conn
+            session.process = conn.proc
             session.tcl_sock = sock
             return True
         except (FileNotFoundError, RuntimeError):
@@ -459,15 +394,8 @@ def _run_session(session: LiveMemorySession) -> None:
                 session.tcl_sock.close()
             except OSError:
                 pass
-        if session.process:
-            try:
-                session.process.terminate()
-                session.process.wait(timeout=5)
-            except Exception:
-                try:
-                    session.process.kill()
-                except Exception:
-                    pass
+        if session.pool_conn is not None:
+            ocd_pool.release_lease(session.pool_conn)
 
 async def live_memory_start(
     variables: str,
@@ -483,9 +411,9 @@ async def live_memory_start(
     and kept in a ring buffer accessible via live_memory_read. Variables
     can be edited while the session runs via live_memory_write.
 
-    IMPORTANT: Only one live_memory session per probe at a time. Stop any
-    existing session before starting a new one. Stop live_memory before
-    flashing or using stm32_read_memory/stm32_write_memory.
+    One live_memory session per probe at a time. The session shares the
+    probe's pooled OpenOCD connection — memory reads and flash work while
+    it runs; no connect/disconnect juggling needed.
 
     Args:
         variables: JSON array of variables to monitor. Elements can be:
@@ -543,14 +471,15 @@ async def live_memory_start(
 
     loop = asyncio.get_event_loop()
     try:
-        proc, sock = await loop.run_in_executor(
+        conn, sock = await loop.run_in_executor(
             _executor,
-            lambda: _start_openocd(sn, target_cfg, chipid),
+            lambda: _pool_session_start(sn, target_cfg, chipid),
         )
     except (FileNotFoundError, RuntimeError) as e:
         return f"ERROR: {e}"
 
-    session.process = proc
+    session.pool_conn = conn
+    session.process = conn.proc
     session.tcl_sock = sock
     session.start_time = time.monotonic()
 
@@ -585,8 +514,8 @@ async def live_memory_start(
 async def live_memory_stop(session_id: str) -> str:
     """Stop a live memory monitoring session.
 
-    Stops the background polling thread, kills the OpenOCD process, and
-    returns session statistics.
+    Stops the background polling thread and releases the session's lease on
+    the shared OpenOCD connection, then returns session statistics.
 
     Args:
         session_id: Session ID from live_memory_start.

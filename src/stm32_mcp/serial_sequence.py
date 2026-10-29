@@ -265,9 +265,10 @@ async def serial_sequence(
     GPIOs over SWD, bit-banging registers with deterministic delays, mixed
     serial/memory flows.
 
-    Timing note: each mem_write/mem_read currently launches a fresh OpenOCD
-    process (~tens of ms overhead per op), so sub-10ms delays between memory
-    ops won't be honored precisely. Delay steps themselves are accurate.
+    Timing note: mem ops reuse the probe's pooled OpenOCD connection (no
+    process startup per op), but a TCL round-trip per op still means
+    sub-10ms delays between memory ops are approximate. Delay steps
+    themselves are accurate.
 
     Args:
         steps: JSON array of step objects. Step types:

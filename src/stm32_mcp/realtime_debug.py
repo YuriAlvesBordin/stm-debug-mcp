@@ -4,13 +4,12 @@ Complements live_memory (non-intrusive variable polling) with full CPU control:
 halt / resume / step / reset, hardware breakpoints, data watchpoints, core
 registers, wait-for-breakpoint, and a heuristic stack-scan backtrace.
 
-Session rules (same as live_memory):
-  - One debug session per probe, and never both a live_memory and a debug
-    session on the same probe (they would fight over OpenOCD's TCL port).
-  - While a session is open, one-shot tools that launch their own OpenOCD
-    (stm32_read_memory, stm32_write_memory, stm32_flash) will fail on the
-    TCL port — stop the session first. Use debug_mem instead for RAM access.
-  - flash programming during a session corrupts debug state; stop first.
+All tool families share one OpenOCD process per probe (see ocd_pool): debug
+sessions hold a lease on it, live_memory and one-shot tools (memory reads,
+flash) run on the same connection. No connect/disconnect juggling between
+tools is needed. Note: halting the core (breakpoints, debug_halt) naturally
+affects anything reading the target — that is CPU state, not connection
+contention.
 """
 
 import asyncio
@@ -23,6 +22,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
+from . import ocd_pool
 from .board_map import resolve_probe_full
 from .debug_tools import (
     _ocd_read_cmd,
@@ -31,7 +31,7 @@ from .debug_tools import (
     parse_write_value,
 )
 from .hexfmt import annotate_hex
-from .live_memory import _start_openocd, _tcl_cmd
+from .live_memory import _tcl_cmd
 from .struct_layout import expand_struct
 from .symexpr import resolve_symbol_flexible
 from .toolchain import find_addr2line, find_nm
@@ -54,6 +54,7 @@ class DebugSession:
 
     process: subprocess.Popen | None = None
     tcl_sock: socket.socket | None = None
+    pool_conn: ocd_pool.SharedOcd | None = None
     target_name: str = ""
     text_symbols: list = field(default_factory=list)
     data_symbols: list = field(default_factory=list)
@@ -201,6 +202,19 @@ def _resolve_location(elf_path: str, location: str) -> int:
         raise ValueError(f'Symbol "{location}" not found in {os.path.basename(elf_path)}.')
     return result[0]
 
+def _s_cmd(session: DebugSession, cmd: str, timeout: float | None = None) -> str:
+    """TCL command on the session socket, serialized with the pool connection
+    so it never interleaves with flash/one-shot commands on the same OpenOCD."""
+    sock = session.tcl_sock
+    if timeout is not None:
+        sock.settimeout(timeout)
+    try:
+        with session.pool_conn.lock:
+            return _tcl_cmd(sock, cmd)
+    finally:
+        if timeout is not None:
+            sock.settimeout(CONNECT_TIMEOUT)
+
 def _checked(session: DebugSession, cmd: str, timeout: float = CMD_TIMEOUT) -> str:
     """Run a state-changing TCL command; return result or raise RuntimeError on error."""
     sock = session.tcl_sock
@@ -210,7 +224,8 @@ def _checked(session: DebugSession, cmd: str, timeout: float = CMD_TIMEOUT) -> s
             f"if {{[catch {{{cmd}}} _dbg_err]}} "
             f'{{ return "ERR: $_dbg_err" }} else {{ return "OK" }}'
         )
-        resp = _tcl_cmd(sock, wrapped)
+        with session.pool_conn.lock:
+            resp = _tcl_cmd(sock, wrapped)
     finally:
         sock.settimeout(CONNECT_TIMEOUT)
     if resp.startswith("ERR:"):
@@ -226,10 +241,10 @@ def _target_state(session: DebugSession) -> str:
     'targets' table, refreshed by 'poll'.
     """
     try:
-        _tcl_cmd(session.tcl_sock, "poll")
+        _s_cmd(session, "poll")
     except (RuntimeError, OSError, ConnectionError):
         pass
-    listing = _tcl_cmd(session.tcl_sock, "targets")
+    listing = _s_cmd(session, "targets")
     for line in listing.splitlines():
         if re.match(r"\s*\d+\*", line):
             cols = line.split()
@@ -240,7 +255,7 @@ def _target_state(session: DebugSession) -> str:
 
 def _reg_dump(session: DebugSession) -> dict:
     """Read all core registers -> {name_lower: int}."""
-    resp = _tcl_cmd(session.tcl_sock, "reg")
+    resp = _s_cmd(session, "reg")
     regs = {}
     for m in re.finditer(
         r"^\s*(?:\(\d+\)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(/\d+\)\s*:\s*(?:0x)?([0-9a-fA-F]+)",
@@ -281,8 +296,8 @@ def _halt_report(session: DebugSession) -> str:
 
 def _list_bpwp(session: DebugSession) -> tuple[str, str]:
     """Raw OpenOCD breakpoint and watchpoint listing."""
-    bps = _tcl_cmd(session.tcl_sock, "bp").strip()
-    wps = _tcl_cmd(session.tcl_sock, "wp").strip()
+    bps = _s_cmd(session, "bp").strip()
+    wps = _s_cmd(session, "wp").strip()
     return bps, wps
 
 def _format_bpwp(bps: str, wps: str) -> str:
@@ -341,7 +356,7 @@ def _stack_backtrace(session: DebugSession, words: int) -> str:
     stack_vals = []
     while words >= 8:
         try:
-            resp = _tcl_cmd(session.tcl_sock, f"{read_cmd} 0x{sp:08X} {words}")
+            resp = _s_cmd(session, f"{read_cmd} 0x{sp:08X} {words}")
         except (OSError, ConnectionError) as e:
             lines.append(f"  (stack scan failed: {e})")
             return "\n".join(lines)
@@ -384,38 +399,36 @@ def _stack_backtrace(session: DebugSession, words: int) -> str:
 
 def _do_session_start(sn: str, target_cfg: str, chipid: int) -> tuple:
     """Blocking session start — runs in executor thread."""
-    return _start_openocd(sn, target_cfg, chipid)
+    conn = ocd_pool.acquire_lease(sn, target_cfg, chipid)
+    sock = ocd_pool.open_socket(conn)
+    return conn, sock
 
 def _do_session_stop(session: DebugSession, resume_first: bool) -> str:
-    """Blocking session stop — runs in executor thread."""
+    """Blocking session stop — runs in executor thread.
+
+    Releases the session's lease on the shared OpenOCD; the connection stays
+    up for memory reads, flash and live_memory.
+    """
     try:
         if resume_first and _target_state(session) == "halted":
             _checked(session, "resume")
     except (RuntimeError, OSError, ConnectionError):
         pass
     try:
-        _tcl_cmd(session.tcl_sock, "shutdown")
-    except (OSError, ConnectionError):
-        pass
-    try:
         session.tcl_sock.close()
     except OSError:
         pass
-    try:
-        session.process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        session.process.terminate()
-        try:
-            session.process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            session.process.kill()
+    session.tcl_sock = None
+    ocd_pool.release_lease(session.pool_conn)
 
 async def debug_session_start(probe: str = "", elf_path: str = "") -> str:
     """Start a real-time debug session via a persistent OpenOCD connection.
 
     Enables CPU control (halt/resume/step/reset), hardware breakpoints,
     watchpoints, register access, and stack inspection through the
-    debug_* tools. One session per probe.
+    debug_* tools. One session per probe. The session shares the probe's
+    pooled OpenOCD connection with memory reads, flash and live_memory —
+    no need to stop it before using other tools.
 
     Args:
         probe: Board nickname, probe nickname, or ST-Link SN.
@@ -425,8 +438,6 @@ async def debug_session_start(probe: str = "", elf_path: str = "") -> str:
     Returns:
         Session ID (pass to all other debug_* tools) and core state.
     """
-    from .live_memory import _sessions as _lm_sessions
-
     sn, target_cfg, chipid = resolve_probe_full(probe)
     if not sn:
         return "ERROR: Could not resolve probe. Use stm32_list_probes to see connected boards."
@@ -440,17 +451,12 @@ async def debug_session_start(probe: str = "", elf_path: str = "") -> str:
         return (f"ERROR: Debug session {existing[0].session_id} already open on this probe. "
                 f"Use it, or debug_session_stop it first.")
 
-    lm_conflict = [sid for sid, s in _lm_sessions.items() if s.sn == sn]
-    if lm_conflict:
-        return (f"ERROR: live_memory session {lm_conflict[0]} is running on this probe. "
-                f"Stop it with live_memory_stop first.")
-
     if elf_path and not os.path.isfile(elf_path):
         return f"ERROR: ELF file not found: {elf_path}"
 
     loop = asyncio.get_event_loop()
     try:
-        proc, sock = await loop.run_in_executor(
+        conn, sock = await loop.run_in_executor(
             _executor, lambda: _do_session_start(sn, target_cfg, chipid),
         )
     except (FileNotFoundError, RuntimeError) as e:
@@ -459,11 +465,12 @@ async def debug_session_start(probe: str = "", elf_path: str = "") -> str:
     session = DebugSession(
         session_id=uuid.uuid4().hex[:8],
         sn=sn, target_cfg=target_cfg, chipid=chipid, elf_path=elf_path,
-        process=proc, tcl_sock=sock, start_time=time.monotonic(),
+        process=conn.proc, tcl_sock=sock, pool_conn=conn,
+        start_time=time.monotonic(),
     )
 
     try:
-        listing = _tcl_cmd(sock, "targets")
+        listing = _s_cmd(session, "targets")
         m = re.search(r"^\s*\d+\*\s+(\S+)", listing, re.M)
         session.target_name = m.group(1) if m else "target0"
     except (OSError, ConnectionError):
@@ -492,16 +499,16 @@ async def debug_session_start(probe: str = "", elf_path: str = "") -> str:
         f"Target state: {state}\n"
         f"ELF: {elf_path or '(none — addresses only)'}"
         + (f" ({sym_count} code symbols)" if sym_count else "") + "\n"
-        "NOTE: stop this session (debug_session_stop) before flashing or "
-        "using stm32_read/write_memory or live_memory on this probe."
+        "This session shares the probe's OpenOCD connection with memory "
+        "reads, flash and live_memory — you can use them without stopping it."
     )
 
 async def debug_session_stop(session_id: str, resume_first: bool = True) -> str:
-    """Stop a debug session and shut down OpenOCD.
+    """Stop a debug session (releases its lease on the shared OpenOCD connection).
 
     Args:
         session_id: Session ID from debug_session_start.
-        resume_first: If the core is halted, resume it before shutting down so
+        resume_first: If the core is halted, resume it before releasing so
             firmware keeps running (default true). Set false to leave the core
             halted.
 
@@ -521,7 +528,7 @@ async def debug_session_stop(session_id: str, resume_first: bool = True) -> str:
     )
 
     duration = time.monotonic() - session.start_time
-    core_note = "resumed before shutdown" if resume_first else "left halted"
+    core_note = "resumed before release" if resume_first else "left halted"
     return (
         f"Debug session {session_id} stopped ({core_note}).\n"
         f"Duration: {duration:.1f}s"
@@ -1046,8 +1053,8 @@ async def debug_mem(
                         ]
                 lines = []
                 for name, t_addr, t_width in targets:
-                    resp = _tcl_cmd(
-                        session.tcl_sock,
+                    resp = _s_cmd(
+                        session,
                         f"{_ocd_read_cmd(t_width)} 0x{t_addr:08X} {max(1, int(count))}",
                     )
                     hexvals = []

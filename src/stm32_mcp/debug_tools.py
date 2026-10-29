@@ -6,14 +6,26 @@ import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
+from . import ocd_pool
 from .board_map import resolve_probe_full
 from .hexfmt import annotate_hex
 from .symexpr import resolve_symbol_flexible
-from .toolchain import find_nm, run_openocd
+from .toolchain import find_nm
 
 _executor = ThreadPoolExecutor(max_workers=2)
 
 MEMORY_TIMEOUT = 10
+
+_LTO_SUFFIX_RE = re.compile(
+    r"^(?P<base>[A-Za-z_]\w*)"
+    r"(?:\.(?:constprop|isra|lto|part|unified|llvm)\.\d+|\.\d+)*$"
+)
+
+def _lto_base_name(name: str) -> str:
+    """Strip GCC LTO/optimization suffixes: 'filtered_rate.3' ->
+    'filtered_rate', 'Scheduler_AddTask.constprop.0.isra.0' -> 'Scheduler_AddTask'."""
+    m = _LTO_SUFFIX_RE.match(name)
+    return m.group("base") if m else name
 
 def _resolve_symbol(elf_path: str, symbol_name: str) -> tuple[int, int] | None:
     """Resolve a symbol name to (address, size) using arm-none-eabi-nm.
@@ -135,10 +147,11 @@ def _do_read_memory(
     cmd = f"{read_cmd} 0x{resolved_addr:08X} {count}"
 
     try:
-        output = run_openocd(sn, target_cfg, ["init", cmd], timeout=MEMORY_TIMEOUT, chipid=chipid)
+        conn = ocd_pool.acquire(sn, target_cfg, chipid)
+        output = ocd_pool.run_cmds(conn, [cmd], timeout_s=MEMORY_TIMEOUT)
     except subprocess.TimeoutExpired:
         return f"ERROR: Memory read timed out after {MEMORY_TIMEOUT}s."
-    except FileNotFoundError as e:
+    except (FileNotFoundError, RuntimeError) as e:
         return f"ERROR: {e}"
 
     values = []
@@ -215,10 +228,11 @@ def _do_write_memory(
     cmd = f"{write_cmd} 0x{resolved_addr:08X} 0x{write_val:X}"
 
     try:
-        output = run_openocd(sn, target_cfg, ["init", cmd], timeout=MEMORY_TIMEOUT, chipid=chipid)
+        conn = ocd_pool.acquire(sn, target_cfg, chipid)
+        output = ocd_pool.run_cmds(conn, [cmd], timeout_s=MEMORY_TIMEOUT)
     except subprocess.TimeoutExpired:
         return f"ERROR: Memory write timed out after {MEMORY_TIMEOUT}s."
-    except FileNotFoundError as e:
+    except (FileNotFoundError, RuntimeError) as e:
         return f"ERROR: {e}"
 
     if "error" in output.lower() and "shutdown" not in output.lower():
